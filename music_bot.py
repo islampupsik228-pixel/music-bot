@@ -7,12 +7,29 @@ import re
 import asyncio
 import requests
 import subprocess
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from shazamio import Shazam
+
+# Запуск мини-сервера для проверки работоспособности на Render
+class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is alive!")
+
+def run_health_check_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
+    server.serve_forever()
+
+threading.Thread(target=run_health_check_server, daemon=True).start()
 
 TOKEN = '8986883128:AAE7XgMQyf0UkThA1L38vsiSPz7FbJU_Us8'
 bot = telebot.TeleBot(TOKEN)
 
 user_data = {}
+chat_id_temp = None
 
 def get_audio_duration(file_path):
     try:
@@ -28,7 +45,6 @@ async def recognize_multiple_tracks(file_path):
     found_tracks = []
     seen_keys = set()
 
-    # Размер куска 5 сек, шаг 3 сек для максимальной точности на коротких переходах
     chunk_size = 5
     step = 3
     start = 0
@@ -71,7 +87,7 @@ def send_welcome(message):
         message, 
         "🎧 **Музыка Ямарова**\n\n"
         "• Напиши название песни для поиска.\n"
-        "• Отправь ссылку на TikTok — я нарежу звук с микро-шагом, распознаю все треки через Shazam и выведу кнопки!"
+        "• Отправь ссылку на TikTok — я нарежу звук, распознаю все треки через Shazam и выведу кнопки!"
     )
 
 @bot.message_handler(func=lambda message: True)
@@ -214,5 +230,5 @@ def download_and_send(chat_id, query, msg_id, search=False):
         print(f"Error downloading YouTube track: {e}")
         bot.edit_message_text("❌ Ошибка скачивания.", chat_id=chat_id, message_id=msg_id)
 
-print("🚀 Бот с Shazam (High-Precision) запущен!")
+print("🚀 Бот запущен!")
 bot.infinity_polling()
