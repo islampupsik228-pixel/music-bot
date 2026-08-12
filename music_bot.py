@@ -6,6 +6,7 @@ import asyncio
 import requests
 import subprocess
 import threading
+import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from shazamio import Shazam
 
@@ -30,106 +31,65 @@ user_data = {}
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.reply_to(
-        message, 
-        "🎧 **Музыка Ямарова**\n\n"
-        "• Отправь мне ссылку на TikTok — я скачаю звук, распознаю трек через Shazam и отправлю его тебе!"
-    )
+    bot.reply_to(message, "🎧 Музыка Ямарова работает!")
 
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     text = message.text.strip()
     chat_id = message.chat.id
-
+    
     url_match = re.search(r'https?://[^\s\)]+', text)
     clean_url = url_match.group(0) if url_match else text
     
     if "tiktok.com" not in clean_url:
-        bot.reply_to(message, "❌ Отправь нормальную ссылку на TikTok!")
         return
 
-    msg = bot.reply_to(message, "🔍 Скачиваю и распознаю трек...")
-    filename = f'tt_{chat_id}'
-    mp3_file = f'{filename}.mp3'
+    msg = bot.reply_to(message, "🔍 Обрабатываю...")
+    filename = f'tt_{chat_id}.mp3'
 
     try:
-        session = requests.Session()
-        res_url = session.head(clean_url, allow_redirects=True).url
+        res = requests.post("https://www.tikwm.com/api/", data={"url": clean_url, "hd": 1}).json()
+        audio_bytes = requests.get(res["data"]["music"]).content
+        with open(filename, 'wb') as f: f.write(audio_bytes)
 
-        res = requests.post("https://www.tikwm.com/api/", data={"url": res_url, "hd": 1}).json()
-        if res.get("code") != 0:
-            raise Exception("API error")
-
-        audio_url = res["data"]["music"]
-        tt_title = res["data"].get("title", "Звук из TikTok")
-
-        audio_bytes = requests.get(audio_url).content
-        with open(mp3_file, 'wb') as f:
-            f.write(audio_bytes)
-
-        converted_file = f'conv_{chat_id}.mp3'
-        subprocess.run(
-            [FFMPEG_PATH, '-y', '-i', mp3_file, '-acodec', 'libmp3lame', '-ar', '44100', converted_file],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-        
-        target_file = converted_file if os.path.exists(converted_file) else mp3_file
-
-        async def recognize_track():
+        async def recognize():
             shazam = Shazam()
-            out = await shazam.recognize(target_file)
-            return out
+            return await shazam.recognize(filename)
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        out = loop.run_until_complete(recognize_track())
+        out = loop.run_until_complete(recognize())
 
-        track_info = ""
+        text_res = "✨ Готово!"
         if 'track' in out:
-            title = out['track'].get('title', 'Неизвестно')
-            artist = out['track'].get('subtitle', 'Неизвестный исполнитель')
-            track_info = f"\n\n🎵 **Распознанный трек:**\n• {artist} — {title}"
-
-        user_data[chat_id] = {
-            'file': mp3_file,
-            'title': tt_title
-        }
-
+            text_res += f"\n🎵 {out['track']['subtitle']} — {out['track']['title']}"
+        
+        user_data[chat_id] = {'file': filename, 'title': res["data"].get("title", "Audio")}
         markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton(text="📥 Получить аудиофайлом", callback_data="send_audio"))
-
-        bot.edit_message_text(
-            f"✨ **Готово!**{track_info}", 
-            chat_id=chat_id, 
-            message_id=msg.message_id, 
-            reply_markup=markup
-        )
-
-        if os.path.exists(converted_file):
-            os.remove(converted_file)
-
+        markup.add(InlineKeyboardButton(text="📥 Скачать", callback_data="send_audio"))
+        bot.edit_message_text(text_res, chat_id, msg.message_id, reply_markup=markup)
     except Exception as e:
-        print(f"Error: {e}")
-        if os.path.exists(mp3_file):
-            os.remove(mp3_file)
-        bot.edit_message_text("❌ Не удалось обработать ссылку или найти трек.", chat_id=chat_id, message_id=msg.message_id)
+        bot.edit_message_text("❌ Ошибка.", chat_id, msg.message_id)
 
 @bot.callback_query_handler(func=lambda call: call.data == 'send_audio')
 def callback_send_audio(call):
-    chat_id = call.message.chat.id
-    if chat_id not in user_data:
-        bot.answer_callback_query(call.id, "Сессия истекла. Отправь ссылку снова.")
-        return
-
-    bot.answer_callback_query(call.id, "Отправляю файл...")
-    data = user_data[chat_id]
-
-    if os.path.exists(data['file']):
+    if call.message.chat.id in user_data:
+        data = user_data[call.message.chat.id]
         with open(data['file'], 'rb') as audio:
-            bot.send_audio(chat_id, audio, title=data['title'], caption="🎧 **Музыка Ямарова**\ntt: yamarovv")
-        bot.delete_message(chat_id, call.message.message_id)
+            bot.send_audio(call.message.chat.id, audio)
         os.remove(data['file'])
 
-print("🚀 Бот запущен!")
-bot.remove_webhook()
-bot.infinity_polling(skip_pending=True)
+print("🚀 Запуск...")
+# Пытаемся сбросить всё, что висело раньше
+try:
+    bot.remove_webhook()
+    time.sleep(1)
+    bot.infinity_polling(skip_pending=True, long_polling_timeout=5)
+except Exception:
+    # Если упало - просто ждем и пробуем еще раз через цикл
+    while True:
+        try:
+            bot.infinity_polling(skip_pending=True)
+        except:
+            time.sleep(5)
+            
