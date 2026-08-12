@@ -1,7 +1,5 @@
 import telebot
-from telebot import types
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-import yt_dlp
 import os
 import re
 import asyncio
@@ -11,11 +9,9 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from shazamio import Shazam
 
-# Путь к распакованному ffmpeg в текущей папке
 FFMPEG_PATH = os.path.abspath('./ffmpeg') if os.path.exists('./ffmpeg') else 'ffmpeg'
 FFPROBE_PATH = os.path.abspath('./ffprobe') if os.path.exists('./ffprobe') else 'ffprobe'
 
-# Запуск мини-сервера для проверки работоспособности на Render
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -71,8 +67,7 @@ async def recognize_multiple_tracks(file_path):
                     seen_keys.add(key)
                     found_tracks.append({
                         'title': title,
-                        'artist': artist,
-                        'search_query': f"{artist} - {title}"
+                        'artist': artist
                     })
         except Exception as e:
             print(f"Error chunk {chunk_idx}: {e}")
@@ -90,8 +85,7 @@ def send_welcome(message):
     bot.reply_to(
         message, 
         "🎧 **Музыка Ямарова**\n\n"
-        "• Напиши название песни для поиска.\n"
-        "• Отправь ссылку на TikTok — я нарежу звук, распознаю все треки через Shazam и выведу кнопки!"
+        "• Отправь мне ссылку на TikTok — я скачаю звук, распознаю все треки через Shazam и скину тебе!"
     )
 
 @bot.message_handler(func=lambda message: True)
@@ -105,63 +99,59 @@ def handle_message(message):
     clean_url = url_match.group(0) if url_match else text
     is_tiktok = "tiktok.com" in clean_url
 
-    if is_tiktok:
-        msg = bot.reply_to(message, "🔍 Скачиваю аудио из TikTok...")
-        filename = f'tt_{chat_id}'
-        mp3_file = f'{filename}.mp3'
+    if not is_tiktok:
+        bot.reply_to(message, "❌ Отправь нормальную ссылку на TikTok!")
+        return
 
-        try:
-            session = requests.Session()
-            res_url = session.head(clean_url, allow_redirects=True).url
+    msg = bot.reply_to(message, "🔍 Скачиваю аудио из TikTok...")
+    filename = f'tt_{chat_id}'
+    mp3_file = f'{filename}.mp3'
 
-            res = requests.post("https://www.tikwm.com/api/", data={"url": res_url, "hd": 1}).json()
-            if res.get("code") != 0:
-                raise Exception("API error")
+    try:
+        session = requests.Session()
+        res_url = session.head(clean_url, allow_redirects=True).url
 
-            audio_url = res["data"]["music"]
-            tt_title = res["data"].get("title", "Звук из TikTok")
+        res = requests.post("https://www.tikwm.com/api/", data={"url": res_url, "hd": 1}).json()
+        if res.get("code") != 0:
+            raise Exception("API error")
 
-            audio_bytes = requests.get(audio_url).content
-            with open(mp3_file, 'wb') as f:
-                f.write(audio_bytes)
+        audio_url = res["data"]["music"]
+        tt_title = res["data"].get("title", "Звук из TikTok")
 
-            bot.edit_message_text("🔍 Сканирую микро-отрезки и ищу все переходы...", chat_id=chat_id, message_id=msg.message_id)
+        audio_bytes = requests.get(audio_url).content
+        with open(mp3_file, 'wb') as f:
+            f.write(audio_bytes)
 
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            tracks = loop.run_until_complete(recognize_multiple_tracks(mp3_file))
+        bot.edit_message_text("🔍 Сканирую микро-отрезки и ищу все переходы...", chat_id=chat_id, message_id=msg.message_id)
 
-            user_data[chat_id] = {
-                'tt_file': mp3_file,
-                'tt_title': tt_title,
-                'tracks': tracks
-            }
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        tracks = loop.run_until_complete(recognize_multiple_tracks(mp3_file))
 
-            markup = InlineKeyboardMarkup()
-            markup.add(InlineKeyboardButton(text="🎬 Полный звук из TikTok", callback_data="dl_tt"))
-            
-            for idx, trk in enumerate(tracks):
-                btn_text = f"🎧 Shazam: {trk['artist']} - {trk['title']}"
-                markup.add(InlineKeyboardButton(text=btn_text, callback_data=f"dl_shz_{idx}"))
+        user_data[chat_id] = {
+            'tt_file': mp3_file,
+            'tt_title': tt_title
+        }
 
-            text_result = "✨ **Найдено несколько треков!** Выбери, что скачать:" if tracks else "✨ Shazam не нашёл отдельных треков, но ты можешь скачать полный звук:"
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton(text="🎬 Полный звук из TikTok", callback_data="dl_tt"))
 
-            bot.edit_message_text(
-                text_result, 
-                chat_id=chat_id, 
-                message_id=msg.message_id, 
-                reply_markup=markup
-            )
+        text_result = f"✨ **Готово!** Звук скачан.\n📌 Название: {tt_title}"
+        if tracks:
+            text_result += "\n\n🎵 Распознанные треки:\n" + "\n".join([f"• {t['artist']} — {t['title']}" for t in tracks])
 
-        except Exception as e:
-            print(f"Error: {e}")
-            if os.path.exists(mp3_file):
-                os.remove(mp3_file)
-            bot.edit_message_text("❌ Не удалось обработать ссылку TikTok.", chat_id=chat_id, message_id=msg.message_id)
+        bot.edit_message_text(
+            text_result, 
+            chat_id=chat_id, 
+            message_id=msg.message_id, 
+            reply_markup=markup
+        )
 
-    else:
-        msg = bot.reply_to(message, f"🔎 Ищу: «{clean_url}»...")
-        download_and_send(chat_id, clean_url, msg.message_id, search=True)
+    except Exception as e:
+        print(f"Error: {e}")
+        if os.path.exists(mp3_file):
+            os.remove(mp3_file)
+        bot.edit_message_text("❌ Не удалось обработать ссылку TikTok.", chat_id=chat_id, message_id=msg.message_id)
 
 @bot.callback_query_handler(func=lambda call: call.data == 'dl_tt')
 def callback_download_tt(call):
@@ -178,66 +168,6 @@ def callback_download_tt(call):
             bot.send_audio(chat_id, audio, title=data['tt_title'], caption="🎧 **Музыка Ямарова**\ntt: yamarovv")
         bot.delete_message(chat_id, call.message.message_id)
         os.remove(data['tt_file'])
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('dl_shz_'))
-def callback_download_shazam_track(call):
-    chat_id = call.message.chat.id
-    if chat_id not in user_data:
-        bot.answer_callback_query(call.id, "Сессия истекла. Отправь ссылку снова.")
-        return
-
-    idx = int(call.data.split('_')[-1])
-    tracks = user_data[chat_id].get('tracks', [])
-    if idx >= len(tracks):
-        bot.answer_callback_query(call.id, "Ошибка выбора трека.")
-        return
-
-    track = tracks[idx]
-    query = track['search_query']
-    
-    bot.answer_callback_query(call.id, f"Скачиваю: {query}")
-    bot.edit_message_text(f"🔎 Скачиваю полную версию: **{query}**...", chat_id=chat_id, message_id=call.message.message_id)
-    
-    if os.path.exists(user_data[chat_id]['tt_file']):
-        os.remove(user_data[chat_id]['tt_file'])
-        
-    download_and_send(chat_id, query, call.message.message_id, search=True)
-
-def download_and_send(chat_id, query, msg_id, search=False):
-    filename = f'song_{chat_id}'
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'outtmpl': f'{filename}.%(ext)s',
-        'ffmpeg_location': '.',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-        'quiet': True,
-        'nocheckcertificate': True,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    }
-    if search:
-        ydl_opts['default_search'] = 'ytsearch1:'
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(query, download=True)
-            track_info = info['entries'][0] if 'entries' in info else info
-            title = track_info.get('title', query)
-
-        mp3_file = f'{filename}.mp3'
-        if os.path.exists(mp3_file):
-            with open(mp3_file, 'rb') as audio:
-                bot.send_audio(chat_id, audio, title=title, caption="🎧 **Музыка Ямарова**\ntt: yamarovv")
-            bot.delete_message(chat_id, msg_id)
-            os.remove(mp3_file)
-        else:
-            bot.edit_message_text("❌ Ошибка обработки аудиофайла.", chat_id=chat_id, message_id=msg_id)
-    except Exception as e:
-        print(f"Error downloading YouTube track: {e}")
-        bot.edit_message_text("❌ Ошибка скачивания.", chat_id=chat_id, message_id=msg_id)
 
 print("🚀 Бот запущен!")
 bot.infinity_polling()
