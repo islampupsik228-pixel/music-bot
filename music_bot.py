@@ -67,7 +67,6 @@ def handle_message(message):
         with open(mp3_file, 'wb') as f:
             f.write(audio_bytes)
 
-        # Конвертируем в нормальный mp3 для Shazam
         converted_file = f'conv_{chat_id}.mp3'
         subprocess.run(
             [FFMPEG_PATH, '-y', '-i', mp3_file, '-acodec', 'libmp3lame', '-ar', '44100', converted_file],
@@ -76,7 +75,6 @@ def handle_message(message):
         
         target_file = converted_file if os.path.exists(converted_file) else mp3_file
 
-        # Распознаем трек целиком через Shazam
         async def recognize_track():
             shazam = Shazam()
             out = await shazam.recognize(target_file)
@@ -107,7 +105,6 @@ def handle_message(message):
             reply_markup=markup
         )
 
-        # Чистим временный файл конвертации
         if os.path.exists(converted_file):
             os.remove(converted_file)
 
@@ -134,4 +131,5 @@ def callback_send_audio(call):
         os.remove(data['file'])
 
 print("🚀 Бот запущен!")
-bot.infinity_polling()
+bot.remove_webhook()
+bot.infinity_polling(skip_pending=True)
