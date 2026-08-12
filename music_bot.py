@@ -79,17 +79,15 @@ def callback_send_audio(call):
             bot.send_audio(call.message.chat.id, audio)
         os.remove(data['file'])
 
-print("🚀 Запуск...")
-# Пытаемся сбросить всё, что висело раньше
-try:
-    bot.remove_webhook()
-    time.sleep(1)
-    bot.infinity_polling(skip_pending=True, long_polling_timeout=5)
-except Exception:
-    # Если упало - просто ждем и пробуем еще раз через цикл
-    while True:
-        try:
-            bot.infinity_polling(skip_pending=True)
-        except:
-            time.sleep(5)
-            
+print("🚀 Запуск ручного пуллинга...")
+offset = 0
+
+while True:
+    try:
+        updates = bot.get_updates(offset=offset, timeout=20, allowed_updates=["message", "callback_query"])
+        for update in updates:
+            offset = update.update_id + 1
+            bot.process_new_updates([update])
+    except Exception as e:
+        print(f"Ошибка пуллинга: {e}")
+        time.sleep(3)
