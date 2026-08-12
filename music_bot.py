@@ -29,7 +29,7 @@ def run_health_check_server():
 
 threading.Thread(target=run_health_check_server, daemon=True).start()
 
-TOKEN = '8986883128:AAFcRONevppdVhK1nLaQSsfsKBzh7mD7iVc'
+TOKEN = '8986883128:AAGIPOEF-kTU7clAQnVhxzTf4dHfsP1j8no'
 bot = telebot.TeleBot(TOKEN)
 
 user_data = {}
