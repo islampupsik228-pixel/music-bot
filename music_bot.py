@@ -11,6 +11,10 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from shazamio import Shazam
 
+# Путь к распакованному ffmpeg в текущей папке
+FFMPEG_PATH = os.path.abspath('./ffmpeg') if os.path.exists('./ffmpeg') else 'ffmpeg'
+FFPROBE_PATH = os.path.abspath('./ffprobe') if os.path.exists('./ffprobe') else 'ffprobe'
+
 # Запуск мини-сервера для проверки работоспособности на Render
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -33,7 +37,7 @@ chat_id_temp = None
 
 def get_audio_duration(file_path):
     try:
-        cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', file_path]
+        cmd = [FFPROBE_PATH, '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', file_path]
         output = subprocess.check_output(cmd).decode().strip()
         return float(output)
     except Exception:
@@ -53,7 +57,7 @@ async def recognize_multiple_tracks(file_path):
     while start < duration:
         chunk_file = f"chunk_{chunk_idx}_{chat_id_temp}.mp3"
         subprocess.run(
-            ['ffmpeg', '-y', '-ss', str(start), '-t', str(chunk_size), '-i', file_path, '-acodec', 'libmp3lame', '-ar', '44100', chunk_file],
+            [FFMPEG_PATH, '-y', '-ss', str(start), '-t', str(chunk_size), '-i', file_path, '-acodec', 'libmp3lame', '-ar', '44100', chunk_file],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
 
@@ -204,12 +208,15 @@ def download_and_send(chat_id, query, msg_id, search=False):
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': f'{filename}.%(ext)s',
+        'ffmpeg_location': '.',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
             'preferredquality': '192',
         }],
         'quiet': True,
+        'nocheckcertificate': True,
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     }
     if search:
         ydl_opts['default_search'] = 'ytsearch1:'
@@ -226,6 +233,8 @@ def download_and_send(chat_id, query, msg_id, search=False):
                 bot.send_audio(chat_id, audio, title=title, caption="🎧 **Музыка Ямарова**\ntt: yamarovv")
             bot.delete_message(chat_id, msg_id)
             os.remove(mp3_file)
+        else:
+            bot.edit_message_text("❌ Ошибка обработки аудиофайла.", chat_id=chat_id, message_id=msg_id)
     except Exception as e:
         print(f"Error downloading YouTube track: {e}")
         bot.edit_message_text("❌ Ошибка скачивания.", chat_id=chat_id, message_id=msg_id)
