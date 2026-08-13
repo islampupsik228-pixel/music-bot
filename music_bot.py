@@ -4,13 +4,10 @@ import os
 import re
 import asyncio
 import requests
-import subprocess
 import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from shazamio import Shazam
-
-FFMPEG_PATH = os.path.abspath('./ffmpeg') if os.path.exists('./ffmpeg') else 'ffmpeg'
 
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -27,7 +24,6 @@ threading.Thread(target=run_health_check_server, daemon=True).start()
 
 TOKEN = '8986883128:AAGIPOEF-kTU7clAQnVhxzTf4dHfsP1j8no'
 bot = telebot.TeleBot(TOKEN)
-user_data = {}
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -48,87 +44,57 @@ def handle_message(message):
     filename = f'tt_{chat_id}.mp3'
 
     try:
+        # Скачиваем данные из TikTok
         res = requests.post("https://www.tikwm.com/api/", data={"url": clean_url, "hd": 1}).json()
         audio_bytes = requests.get(res["data"]["music"]).content
-        with open(filename, 'wb') as f: f.write(audio_bytes)
-
-        async def recognize():
-            shazam = Shazam()
-            return await shazam.recognize(filename)
-
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        out = loop.run_until_complete(recognize())
+        with open(filename, 'wb') as f:
+            f.write(audio_bytes)
 
         song_title = res["data"].get("title", "Audio")
         artist_name = "TikTok"
 
-        has_track = 'track' in out
-        if has_track:
-            artist_name = out['track'].get('subtitle', 'TikTok')
-            song_title = out['track'].get('title', song_title)
+        # Пытаемся распознать через Shazam, но если упадет — не ломаем отправку
+        try:
+            async def recognize():
+                shazam = Shazam()
+                return await shazam.recognize(filename)
 
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            out = loop.run_until_complete(recognize())
+
+            if 'track' in out:
+                artist_name = out['track'].get('subtitle', 'TikTok')
+                song_title = out['track'].get('title', song_title)
+        except Exception as shazam_err:
+            print(f"Шазам пропущен (ошибка): {shazam_err}")
+
+        # Формируем чистое имя файла
         clean_filename = f"{artist_name} - {song_title}.mp3"
         clean_filename = re.sub(r'[\\/*?:"<>|]', "", clean_filename)
 
-        # Если трек успешно найден Shazam — отправляем сразу!
-        if has_track:
-            bot.edit_message_text(f"✨ Готово!\n🎵 {artist_name} — {song_title}", chat_id, msg.message_id)
-            with open(filename, 'rb') as audio:
-                bot.send_audio(
-                    chat_id, 
-                    audio, 
-                    title=song_title, 
-                    performer=artist_name,
-                    visible_file_name=clean_filename
-                )
-            if os.path.exists(filename):
-                os.remove(filename)
-        else:
-            # Если песня не распозналась, оставляем кнопку для скачивания того, что есть
-            user_data[chat_id] = {
-                'file': filename, 
-                'title': song_title,
-                'performer': artist_name,
-                'clean_name': clean_filename
-            }
-            markup = InlineKeyboardMarkup()
-            markup.add(InlineKeyboardButton(text="📥 Скачать аудио", callback_data="send_audio"))
-            bot.edit_message_text("✨ Готово! (Музыка не распознана, скачайте оригинал)", chat_id, msg.message_id, reply_markup=markup)
-
-    except Exception as e:
-        print(f"Ошибка: {e}")
-        bot.edit_message_text("❌ Ошибка при обработке.", chat_id, msg.message_id)
-
-@bot.callback_query_handler(func=lambda call: call.data == 'send_audio')
-def callback_send_audio(call):
-    chat_id = call.message.chat.id
-    if chat_id in user_data:
-        data = user_data[chat_id]
-        if os.path.exists(data['file']):
-            try:
-                with open(data['file'], 'rb') as audio:
-                    bot.send_audio(
-                        chat_id, 
-                        audio, 
-                        title=data['title'], 
-                        performer=data['performer'],
-                        visible_file_name=data['clean_name']
-                    )
-                bot.answer_callback_query(call.id, "Отправляю!")
-            except Exception as e:
-                print(f"Ошибка отправки по кнопке: {e}")
+        bot.edit_message_text(f"✨ Готово!\n🎵 {artist_name} — {song_title}", chat_id, msg.message_id)
+        
+        # Сразу отправляем аудиофайл
+        with open(filename, 'rb') as audio:
+            bot.send_audio(
+                chat_id, 
+                audio, 
+                title=song_title, 
+                performer=artist_name,
+                visible_file_name=clean_filename
+            )
             
-            # Удаляем файл после отправки
+    except Exception as e:
+        print(f"Общая ошибка: {e}")
+        bot.edit_message_text("❌ Ошибка при скачивании из TikTok.", chat_id, msg.message_id)
+    finally:
+        # Удаляем временный файл в любом случае
+        if os.path.exists(filename):
             try:
-                os.remove(data['file'])
+                os.remove(filename)
             except:
                 pass
-            del user_data[chat_id]
-        else:
-            bot.answer_callback_query(call.id, "Файл не найден, отправьте ссылку заново!", show_alert=True)
-    else:
-        bot.answer_callback_query(call.id, "Сессия устарела, отправьте ссылку заново.", show_alert=True)
 
 print("🚀 Запуск ручного пуллинга...")
 offset = 0
