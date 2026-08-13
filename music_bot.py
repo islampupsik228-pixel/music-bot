@@ -61,10 +61,20 @@ def handle_message(message):
         out = loop.run_until_complete(recognize())
 
         text_res = "✨ Готово!"
+        song_title = res["data"].get("title", "Audio")
+        artist_name = "TikTok"
+
         if 'track' in out:
-            text_res += f"\n🎵 {out['track']['subtitle']} — {out['track']['title']}"
+            artist_name = out['track'].get('subtitle', 'TikTok')
+            song_title = out['track'].get('title', song_title)
+            text_res += f"\n🎵 {artist_name} — {song_title}"
         
-        user_data[chat_id] = {'file': filename, 'title': res["data"].get("title", "Audio")}
+        user_data[chat_id] = {
+            'file': filename, 
+            'title': song_title,
+            'performer': artist_name
+        }
+        
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton(text="📥 Скачать", callback_data="send_audio"))
         bot.edit_message_text(text_res, chat_id, msg.message_id, reply_markup=markup)
@@ -73,11 +83,25 @@ def handle_message(message):
 
 @bot.callback_query_handler(func=lambda call: call.data == 'send_audio')
 def callback_send_audio(call):
-    if call.message.chat.id in user_data:
-        data = user_data[call.message.chat.id]
-        with open(data['file'], 'rb') as audio:
-            bot.send_audio(call.message.chat.id, audio)
-        os.remove(data['file'])
+    chat_id = call.message.chat.id
+    if chat_id in user_data:
+        data = user_data[chat_id]
+        if os.path.exists(data['file']):
+            title = data.get('title', 'Audio')
+            performer = data.get('performer', 'TikTok')
+            
+            clean_filename = f"{performer} - {title}.mp3"
+            clean_filename = re.sub(r'[\\/*?:"<>|]', "", clean_filename)
+
+            with open(data['file'], 'rb') as audio:
+                bot.send_audio(
+                    chat_id, 
+                    audio, 
+                    title=title, 
+                    performer=performer,
+                    visible_file_name=clean_filename
+                )
+            os.remove(data['file'])
 
 print("🚀 Запуск ручного пуллинга...")
 offset = 0
