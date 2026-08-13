@@ -60,26 +60,45 @@ def handle_message(message):
         asyncio.set_event_loop(loop)
         out = loop.run_until_complete(recognize())
 
-        text_res = "✨ Готово!"
         song_title = res["data"].get("title", "Audio")
         artist_name = "TikTok"
 
-        if 'track' in out:
+        has_track = 'track' in out
+        if has_track:
             artist_name = out['track'].get('subtitle', 'TikTok')
             song_title = out['track'].get('title', song_title)
-            text_res += f"\n🎵 {artist_name} — {song_title}"
-        
-        user_data[chat_id] = {
-            'file': filename, 
-            'title': song_title,
-            'performer': artist_name
-        }
-        
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton(text="📥 Скачать", callback_data="send_audio"))
-        bot.edit_message_text(text_res, chat_id, msg.message_id, reply_markup=markup)
+
+        clean_filename = f"{artist_name} - {song_title}.mp3"
+        clean_filename = re.sub(r'[\\/*?:"<>|]', "", clean_filename)
+
+        # Если трек успешно найден Shazam — отправляем сразу!
+        if has_track:
+            bot.edit_message_text(f"✨ Готово!\n🎵 {artist_name} — {song_title}", chat_id, msg.message_id)
+            with open(filename, 'rb') as audio:
+                bot.send_audio(
+                    chat_id, 
+                    audio, 
+                    title=song_title, 
+                    performer=artist_name,
+                    visible_file_name=clean_filename
+                )
+            if os.path.exists(filename):
+                os.remove(filename)
+        else:
+            # Если песня не распозналась, оставляем кнопку для скачивания того, что есть
+            user_data[chat_id] = {
+                'file': filename, 
+                'title': song_title,
+                'performer': artist_name,
+                'clean_name': clean_filename
+            }
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton(text="📥 Скачать аудио", callback_data="send_audio"))
+            bot.edit_message_text("✨ Готово! (Музыка не распознана, скачайте оригинал)", chat_id, msg.message_id, reply_markup=markup)
+
     except Exception as e:
-        bot.edit_message_text("❌ Ошибка.", chat_id, msg.message_id)
+        print(f"Ошибка: {e}")
+        bot.edit_message_text("❌ Ошибка при обработке.", chat_id, msg.message_id)
 
 @bot.callback_query_handler(func=lambda call: call.data == 'send_audio')
 def callback_send_audio(call):
@@ -87,21 +106,29 @@ def callback_send_audio(call):
     if chat_id in user_data:
         data = user_data[chat_id]
         if os.path.exists(data['file']):
-            title = data.get('title', 'Audio')
-            performer = data.get('performer', 'TikTok')
+            try:
+                with open(data['file'], 'rb') as audio:
+                    bot.send_audio(
+                        chat_id, 
+                        audio, 
+                        title=data['title'], 
+                        performer=data['performer'],
+                        visible_file_name=data['clean_name']
+                    )
+                bot.answer_callback_query(call.id, "Отправляю!")
+            except Exception as e:
+                print(f"Ошибка отправки по кнопке: {e}")
             
-            clean_filename = f"{performer} - {title}.mp3"
-            clean_filename = re.sub(r'[\\/*?:"<>|]', "", clean_filename)
-
-            with open(data['file'], 'rb') as audio:
-                bot.send_audio(
-                    chat_id, 
-                    audio, 
-                    title=title, 
-                    performer=performer,
-                    visible_file_name=clean_filename
-                )
-            os.remove(data['file'])
+            # Удаляем файл после отправки
+            try:
+                os.remove(data['file'])
+            except:
+                pass
+            del user_data[chat_id]
+        else:
+            bot.answer_callback_query(call.id, "Файл не найден, отправьте ссылку заново!", show_alert=True)
+    else:
+        bot.answer_callback_query(call.id, "Сессия устарела, отправьте ссылку заново.", show_alert=True)
 
 print("🚀 Запуск ручного пуллинга...")
 offset = 0
