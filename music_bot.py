@@ -1,5 +1,4 @@
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import os
 import re
 import asyncio
@@ -24,7 +23,6 @@ threading.Thread(target=run_health_check_server, daemon=True).start()
 
 TOKEN = '8986883128:AAGIPOEF-kTU7clAQnVhxzTf4dHfsP1j8no'
 bot = telebot.TeleBot(TOKEN)
-user_data = {}
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -44,11 +42,21 @@ def handle_message(message):
     msg = bot.reply_to(message, "🔍 Обрабатываю...")
     filename = f'tt_{chat_id}.mp3'
 
+    res = None
+    # Делаем 3 попытки запроса к API на случай временного сбоя
+    for attempt in range(3):
+        try:
+            response = requests.post("https://www.tikwm.com/api/", data={"url": clean_url, "hd": 1}, timeout=10)
+            res = response.json()
+            if "data" in res and "music" in res["data"]:
+                break
+        except Exception as e:
+            print(f"Попытка {attempt + 1} не удалась: {e}")
+        time.sleep(1)
+
     try:
-        res = requests.post("https://www.tikwm.com/api/", data={"url": clean_url, "hd": 1}).json()
-        
-        if "data" not in res or "music" not in res["data"]:
-            bot.edit_message_text("❌ Ошибка: не удалось получить аудио из TikTok.", chat_id, msg.message_id)
+        if not res or "data" not in res or "music" not in res["data"]:
+            bot.edit_message_text("❌ Не удалось получить аудио из TikTok. Попробуй еще раз чуть позже.", chat_id, msg.message_id)
             return
 
         audio_bytes = requests.get(res["data"]["music"]).content
@@ -77,9 +85,9 @@ def handle_message(message):
         clean_filename = f"{artist_name} - {song_title}.mp3"
         clean_filename = re.sub(r'[\\/*?:"<>|]', "", clean_filename)
 
-        # СРАЗУ отправляем аудиофайл без всяких лишних кнопок, раз трек один!
         bot.edit_message_text(f"✨ Готово!\n🎵 {artist_name} — {song_title}", chat_id, msg.message_id)
         
+        # Сразу отправляем аудиофайл
         with open(filename, 'rb') as audio:
             bot.send_audio(
                 chat_id, 
@@ -90,8 +98,8 @@ def handle_message(message):
             )
             
     except Exception as e:
-        print(f"Ошибка: {e}")
-        bot.edit_message_text("❌ Ошибка при обработке ссылки.", chat_id, msg.message_id)
+        print(f"Ошибка отправки: {e}")
+        bot.edit_message_text("❌ Ошибка при отправке аудио.", chat_id, msg.message_id)
     finally:
         if os.path.exists(filename):
             try:
@@ -111,4 +119,3 @@ while True:
     except Exception as e:
         print(f"Ошибка пуллинга: {e}")
         time.sleep(3)
-        
