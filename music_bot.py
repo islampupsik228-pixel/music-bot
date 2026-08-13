@@ -1,13 +1,10 @@
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import os
 import re
-import asyncio
-import requests
 import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from shazamio import Shazam
+import yt_dlp
 
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -40,56 +37,52 @@ def handle_message(message):
     if "tiktok.com" not in clean_url:
         return
 
-    msg = bot.reply_to(message, "🔍 Обрабатываю...")
-    filename = f'tt_{chat_id}.mp3'
+    msg = bot.reply_to(message, "🔍 Скачиваю аудио...")
+    output_template = f'tt_{chat_id}'
+    filename = f'{output_template}.mp3'
+
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': output_template,
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+        'quiet': True,
+    }
 
     try:
-        # Скачиваем данные из TikTok
-        res = requests.post("https://www.tikwm.com/api/", data={"url": clean_url, "hd": 1}).json()
-        audio_bytes = requests.get(res["data"]["music"]).content
-        with open(filename, 'wb') as f:
-            f.write(audio_bytes)
+        # Скачиваем через yt-dlp
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(clean_url, download=True)
+            song_title = info.get('title', 'Audio')
+            artist_name = info.get('uploader', 'TikTok')
 
-        song_title = res["data"].get("title", "Audio")
-        artist_name = "TikTok"
-
-        # Пытаемся распознать через Shazam, но если упадет — не ломаем отправку
-        try:
-            async def recognize():
-                shazam = Shazam()
-                return await shazam.recognize(filename)
-
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            out = loop.run_until_complete(recognize())
-
-            if 'track' in out:
-                artist_name = out['track'].get('subtitle', 'TikTok')
-                song_title = out['track'].get('title', song_title)
-        except Exception as shazam_err:
-            print(f"Шазам пропущен (ошибка): {shazam_err}")
-
-        # Формируем чистое имя файла
+        # Очищаем название от запрещенных символов для файловой системы
         clean_filename = f"{artist_name} - {song_title}.mp3"
         clean_filename = re.sub(r'[\\/*?:"<>|]', "", clean_filename)
 
         bot.edit_message_text(f"✨ Готово!\n🎵 {artist_name} — {song_title}", chat_id, msg.message_id)
         
-        # Сразу отправляем аудиофайл
-        with open(filename, 'rb') as audio:
-            bot.send_audio(
-                chat_id, 
-                audio, 
-                title=song_title, 
-                performer=artist_name,
-                visible_file_name=clean_filename
-            )
-            
+        # Отправляем готовый файл в Telegram с правильными тегами
+        if os.path.exists(filename):
+            with open(filename, 'rb') as audio:
+                bot.send_audio(
+                    chat_id, 
+                    audio, 
+                    title=song_title, 
+                    performer=artist_name,
+                    visible_file_name=clean_filename
+                )
+        else:
+            bot.edit_message_text("❌ Ошибка: файл не был создан.", chat_id, msg.message_id)
+
     except Exception as e:
-        print(f"Общая ошибка: {e}")
-        bot.edit_message_text("❌ Ошибка при скачивании из TikTok.", chat_id, msg.message_id)
+        print(f"Ошибка yt-dlp: {e}")
+        bot.edit_message_text("❌ Не удалось скачать видео из TikTok.", chat_id, msg.message_id)
     finally:
-        # Удаляем временный файл в любом случае
+        # Удаляем временный файл
         if os.path.exists(filename):
             try:
                 os.remove(filename)
