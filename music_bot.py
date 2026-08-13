@@ -4,13 +4,10 @@ import os
 import re
 import asyncio
 import requests
-import subprocess
 import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from shazamio import Shazam
-
-FFMPEG_PATH = os.path.abspath('./ffmpeg') if os.path.exists('./ffmpeg') else 'ffmpeg'
 
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -61,7 +58,7 @@ def handle_message(message):
         song_title = res["data"].get("title", "Audio")
         artist_name = "TikTok"
 
-        # Пытаемся распознать через Shazam без риска уронить бота
+        # Пытаемся распознать через Shazam
         try:
             async def recognize():
                 shazam = Shazam()
@@ -77,55 +74,30 @@ def handle_message(message):
         except Exception as shazam_err:
             print(f"Шазам пропущен: {shazam_err}")
 
-        text_res = f"✨ Готово!\n🎵 {artist_name} — {song_title}"
-        
         clean_filename = f"{artist_name} - {song_title}.mp3"
         clean_filename = re.sub(r'[\\/*?:"<>|]', "", clean_filename)
 
-        user_data[chat_id] = {
-            'file': filename, 
-            'title': song_title,
-            'performer': artist_name,
-            'clean_name': clean_filename
-        }
+        # СРАЗУ отправляем аудиофайл без всяких лишних кнопок, раз трек один!
+        bot.edit_message_text(f"✨ Готово!\n🎵 {artist_name} — {song_title}", chat_id, msg.message_id)
         
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton(text="📥 Скачать", callback_data="send_audio"))
-        bot.edit_message_text(text_res, chat_id, msg.message_id, reply_markup=markup)
-        
+        with open(filename, 'rb') as audio:
+            bot.send_audio(
+                chat_id, 
+                audio, 
+                title=song_title, 
+                performer=artist_name,
+                visible_file_name=clean_filename
+            )
+            
     except Exception as e:
         print(f"Ошибка: {e}")
         bot.edit_message_text("❌ Ошибка при обработке ссылки.", chat_id, msg.message_id)
-
-@bot.callback_query_handler(func=lambda call: call.data == 'send_audio')
-def callback_send_audio(call):
-    chat_id = call.message.chat.id
-    if chat_id in user_data:
-        data = user_data[chat_id]
-        if os.path.exists(data['file']):
+    finally:
+        if os.path.exists(filename):
             try:
-                with open(data['file'], 'rb') as audio:
-                    bot.send_audio(
-                        chat_id, 
-                        audio, 
-                        title=data['title'], 
-                        performer=data['performer'],
-                        visible_file_name=data['clean_name']
-                    )
-                bot.answer_callback_query(call.id, "Отправляю музыку!")
-            except Exception as e:
-                print(f"Ошибка отправки файла: {e}")
-                bot.answer_callback_query(call.id, "Ошибка отправки файла.", show_alert=True)
-            
-            try:
-                os.remove(data['file'])
+                os.remove(filename)
             except:
                 pass
-            del user_data[chat_id]
-        else:
-            bot.answer_callback_query(call.id, "Файл не найден, отправьте ссылку заново!", show_alert=True)
-    else:
-        bot.answer_callback_query(call.id, "Сессия устарела, отправьте ссылку заново.", show_alert=True)
 
 print("🚀 Запуск ручного пуллинга...")
 offset = 0
