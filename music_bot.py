@@ -43,7 +43,6 @@ def handle_message(message):
     filename = f'tt_{chat_id}.mp3'
 
     res = None
-    # Делаем 3 попытки запроса к API на случай временного сбоя
     for attempt in range(3):
         try:
             response = requests.post("https://www.tikwm.com/api/", data={"url": clean_url, "hd": 1}, timeout=10)
@@ -56,7 +55,7 @@ def handle_message(message):
 
     try:
         if not res or "data" not in res or "music" not in res["data"]:
-            bot.edit_message_text("❌ Не удалось получить аудио из TikTok. Попробуй еще раз чуть позже.", chat_id, msg.message_id)
+            bot.edit_message_text("❌ Не удалось получить аудио из TikTok.", chat_id, msg.message_id)
             return
 
         audio_bytes = requests.get(res["data"]["music"]).content
@@ -82,19 +81,15 @@ def handle_message(message):
         except Exception as shazam_err:
             print(f"Шазам пропущен: {shazam_err}")
 
-        clean_filename = f"{artist_name} - {song_title}.mp3"
-        clean_filename = re.sub(r'[\\/*?:"<>|]', "", clean_filename)
-
         bot.edit_message_text(f"✨ Готово!\n🎵 {artist_name} — {song_title}", chat_id, msg.message_id)
         
-        # Сразу отправляем аудиофайл
+        # Отправляем аудио в чистом виде (самый надежный способ для Telegram)
         with open(filename, 'rb') as audio:
             bot.send_audio(
                 chat_id, 
                 audio, 
                 title=song_title, 
-                performer=artist_name,
-                visible_file_name=clean_filename
+                performer=artist_name
             )
             
     except Exception as e:
